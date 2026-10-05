@@ -1,0 +1,12 @@
+server:
+  port: 8083
+spring:
+  task:
+    scheduling:
+      pool:
+        size: 2
+thing:
+  base-url: http://localhost:${server.port}
+gateway:
+  url: http://localhost:8080
+  token: operator-secret

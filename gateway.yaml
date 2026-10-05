@@ -1,0 +1,504 @@
+openapi: 3.0.3
+info:
+  title: Smart Lab Gateway API
+  version: 1.0.0
+  description: Three virtual things, an authenticated proxy, SSE events, R1/R2 automation
+    and liveness checking. viewer may read and subscribe; operator may also write,
+    act, register and post events.
+servers:
+- url: http://localhost:8080
+security:
+- bearerAuth: []
+paths:
+  /:
+    get:
+      summary: Public dashboard
+      operationId: getDashboard
+      responses:
+        '200':
+          description: Dashboard HTML
+          headers:
+            X-Access-Role: &id001
+              description: Role of the authenticated caller
+              schema:
+                type: string
+                enum:
+                - viewer
+                - operator
+          content:
+            text/html:
+              schema:
+                type: string
+      security: []
+  /things:
+    get:
+      summary: List registered things and liveness status
+      operationId: listThings
+      responses:
+        '200':
+          description: Registered things
+          headers:
+            X-Access-Role: *id001
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ThingSummary'
+        '401':
+          $ref: '#/components/responses/Error401'
+    post:
+      summary: Register a thing (operator only)
+      operationId: registerThing
+      responses:
+        '201':
+          description: Thing registered
+          headers:
+            X-Access-Role: *id001
+            Location:
+              description: URL of the registered thing
+              schema:
+                type: string
+              example: /things/lamp
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThingRegistration'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '409':
+          $ref: '#/components/responses/Error409'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThingRegistration'
+            example:
+              id: lamp
+              name: Lamp
+              baseUrl: http://localhost:8082
+              model: {}
+  /things/{id}:
+    parameters:
+    - &id002
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      example: lamp
+    get:
+      summary: Read a registered thing description
+      operationId: getThing
+      responses:
+        '200':
+          description: Description, status and links
+          headers:
+            X-Access-Role: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThingDetails'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '404':
+          $ref: '#/components/responses/Error404'
+    delete:
+      summary: Unregister a thing (operator only)
+      operationId: deleteThing
+      responses:
+        '204':
+          description: Thing removed; empty response body
+          headers:
+            X-Access-Role: *id001
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+  /things/{id}/properties:
+    parameters:
+    - *id002
+    get:
+      summary: Read all properties through the gateway
+      operationId: readProperties
+      responses:
+        '200':
+          description: All properties
+          headers:
+            X-Access-Role: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Properties'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '502':
+          $ref: '#/components/responses/Error502'
+  /things/{id}/properties/{name}:
+    parameters:
+    - *id002
+    - &id003
+      name: name
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      summary: Read one property
+      operationId: readProperty
+      responses:
+        '200':
+          description: Property name and value
+          headers:
+            X-Access-Role: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Property'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '502':
+          $ref: '#/components/responses/Error502'
+    put:
+      summary: Write one property (operator only)
+      operationId: writeProperty
+      responses:
+        '200':
+          description: Updated property
+          headers:
+            X-Access-Role: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Property'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '502':
+          $ref: '#/components/responses/Error502'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValueInput'
+            example:
+              value: 60
+      description: temperature and lastMotion are read-only. brightness is an integer
+        from 0 to 100; on is boolean; mode is off, heat or eco; target is a finite
+        number.
+  /things/{id}/actions/{name}:
+    parameters:
+    - *id002
+    - *id003
+    post:
+      summary: Invoke an action (operator only)
+      operationId: invokeAction
+      responses:
+        '200':
+          description: Action result
+          headers:
+            X-Access-Role: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResult'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '502':
+          $ref: '#/components/responses/Error502'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValueInput'
+      description: toggle and simulateMotion need no body. setBrightness needs a value
+        from 0 to 100. setTarget needs a numeric value. Unknown actions produce 404.
+  /events:
+    post:
+      summary: Receive a registered thing event (operator only)
+      operationId: postEvent
+      responses:
+        '202':
+          description: Event accepted; empty response body
+          headers:
+            X-Access-Role: *id001
+        '400':
+          $ref: '#/components/responses/Error400'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThingEvent'
+            example:
+              thingId: motion
+              type: motion
+              data:
+                lastMotion: '2026-10-02T15:00:00Z'
+              timestamp: '2026-10-02T15:00:00Z'
+  /events/stream:
+    get:
+      summary: Subscribe to real-time events
+      operationId: streamEvents
+      responses:
+        '200':
+          description: 'SSE stream: hello, registry, thing and rule events'
+          headers:
+            X-Access-Role: *id001
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Error401'
+      security:
+      - bearerAuth: []
+      - streamToken: []
+      description: viewer and operator may subscribe. For this endpoint only, token
+        may be passed in the query string because browser EventSource cannot set headers.
+        If an Authorization header is provided, it is used before the query token.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Static tokens configured in application.yml; these are not JWTs.
+    streamToken:
+      type: apiKey
+      in: query
+      name: token
+      description: Accepted on /events/stream only.
+  schemas:
+    ThingRegistration:
+      type: object
+      required:
+      - id
+      - name
+      - baseUrl
+      - model
+      properties:
+        id:
+          type: string
+          pattern: ^[A-Za-z0-9_-]+$
+        name:
+          type: string
+          minLength: 1
+        baseUrl:
+          type: string
+          format: uri
+          description: HTTP or HTTPS base URL
+        model:
+          type: object
+          additionalProperties: true
+    ThingSummary:
+      type: object
+      required:
+      - id
+      - name
+      - status
+      - links
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+          enum:
+          - online
+          - offline
+        links: &id004
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            self: /things/lamp
+    ThingDetails:
+      allOf:
+      - $ref: '#/components/schemas/ThingRegistration'
+      - type: object
+        required:
+        - status
+        - links
+        properties:
+          status:
+            type: string
+            enum:
+            - online
+            - offline
+          links: *id004
+    Properties:
+      type: object
+      additionalProperties: &id005
+        oneOf:
+        - type: boolean
+        - type: number
+        - type: string
+          nullable: true
+      example:
+        'on': false
+        brightness: 50
+    Property:
+      type: object
+      required:
+      - name
+      - value
+      properties:
+        name:
+          type: string
+        value: *id005
+      example:
+        name: brightness
+        value: 80
+    ValueInput:
+      type: object
+      required:
+      - value
+      properties:
+        value: *id005
+    ActionResult:
+      type: object
+      required:
+      - action
+      - status
+      - properties
+      properties:
+        action:
+          type: string
+        status:
+          type: string
+          enum:
+          - completed
+        properties:
+          $ref: '#/components/schemas/Properties'
+    ThingEvent:
+      type: object
+      required:
+      - thingId
+      - type
+      properties:
+        thingId:
+          type: string
+        type:
+          type: string
+        data:
+          type: object
+          additionalProperties: true
+          nullable: true
+        timestamp:
+          type: string
+          format: date-time
+          nullable: true
+    Error:
+      type: object
+      required:
+      - status
+      - error
+      properties:
+        status:
+          type: integer
+        error:
+          type: string
+      example:
+        status: 404
+        error: thing lamp is not registered
+  responses:
+    Error400:
+      description: Missing field, malformed JSON, invalid value or read-only property
+      headers:
+        X-Access-Role: *id001
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            status: 400
+            error: Missing field, malformed JSON, invalid value or read-only property
+    Error401:
+      description: Missing or invalid token
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+          example: Bearer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            status: 401
+            error: Missing or invalid token
+    Error403:
+      description: Viewer is read-only; operator required
+      headers:
+        X-Access-Role: *id001
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            status: 403
+            error: Viewer is read-only; operator required
+    Error404:
+      description: Unknown thing, property or action
+      headers:
+        X-Access-Role: *id001
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            status: 404
+            error: Unknown thing, property or action
+    Error409:
+      description: Thing id already registered
+      headers:
+        X-Access-Role: *id001
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            status: 409
+            error: Thing id already registered
+    Error502:
+      description: Thing unreachable or request timed out
+      headers:
+        X-Access-Role: *id001
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            status: 502
+            error: Thing unreachable or request timed out

@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Smart Lab - starter dashboard</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 60rem; }
+    pre { background: #f4f4f4; padding: .8rem; overflow: auto; max-height: 20rem; }
+    input { width: 14rem; }
+    /* Added for the device cards. The original page layout is kept. */
+    #cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; }
+    .card { border: 1px solid #ccc; padding: 1rem; min-width: 0; }
+    .card h3 { margin-top: 0; }
+    .card pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .card input[type="number"] { width: 5rem; }
+    .controls { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin: .6rem 0; }
+    .message { min-height: 1.3rem; font-size: .9rem; }
+    .error { color: #a00; }
+    .device-status { font-size: .9rem; }
+    .online { color: #176d27; }
+    .offline { color: #a00; }
+    @media (max-width: 600px) { body { margin: 1rem; } input { max-width: 100%; } }
+  </style>
+</head>
+<body>
+  <h1>Smart Lab - starter dashboard</h1>
+
+  <p>
+    Token: <input id="token" value="operator-secret">
+    <button onclick="loadThings()">Load things</button>
+    <button onclick="connect()">Connect to the event stream</button>
+    <span id="role">Role: not checked</span>
+  </p>
+
+  <h2>Registered things (GET /things)</h2>
+  <pre id="things">-</pre>
+
+  <h2>Thing controls</h2>
+  <div id="cards">Click "Load things" to show the device cards.</div>
+
+  <h2>Live events (GET /events/stream)</h2>
+  <pre id="events"></pre>
+
+  <script>
+    const token = () => document.getElementById('token').value;
+
+    async function loadThings() {
+      try {
+        const res = await fetch('/things', { headers: { Authorization: 'Bearer ' + token() } });
+        setAccessRole(res.headers.get('X-Access-Role'));
+        const things = await res.json();
+        document.getElementById('things').textContent =
+          res.status + '\n' + JSON.stringify(things, null, 2);
+        if (!res.ok) return;
+
+        const active = new Set(things.map(thing => thing.id));
+        for (const [id, card] of cards) {
+          if (!active.has(id)) { card.element.remove(); cards.delete(id); }
+        }
+        if (cards.size === 0) document.getElementById('cards').textContent = '';
+        for (const thing of things) {
+          if (!cards.has(thing.id)) createCard(thing);
+          const card = cards.get(thing.id);
+          card.online = thing.status !== 'offline';
+          card.status.textContent = 'Status: ' + (card.online ? 'online' : 'offline');
+          card.status.className = 'device-status ' + (card.online ? 'online' : 'offline');
+          updateButtons(card);
+          if (card.online) { showMessage(card, ''); await refreshThing(thing.id); }
+          else showMessage(card, 'Device offline. Properties shown are the last known values.', true);
+        }
+        if (things.length === 0) document.getElementById('cards').textContent = 'No registered things.';
+      } catch (error) {
+        log('error', error.message);
+      }
+    }
+
+    // EventSource cannot send headers: token in the query string
+    let source;
+    function connect() {
+      if (source) source.close();
+      source = new EventSource('/events/stream?token=' + encodeURIComponent(token()));
+      for (const name of ['hello', 'registry', 'thing', 'rule']) {
+        source.addEventListener(name, e => {
+          log(name, e.data); // Keep the starter kit's event log.
+          if (name === 'registry') loadThings();
+          if (name === 'thing') updateFromEvent(JSON.parse(e.data));
+        });
+      }
+      source.onerror = () => log('error', 'stream closed (wrong token or gateway stopped?)');
+      loadThings(); // Refresh role and cards when connecting with a different token.
+    }
+
+    function log(name, data) {
+      const pre = document.getElementById('events');
+      const previous = pre.textContent.split('\n').slice(0, 99).join('\n');
+      pre.textContent = new Date().toLocaleTimeString() + ' [' + name + '] ' + data + '\n' + previous;
+    }
+
+    // TODO: one card per thing, updated on "thing" events.
+    const cards = new Map();
+    let currentRole = 'unknown';
+
+    function setAccessRole(role) {
+      currentRole = role || 'unknown';
+      document.getElementById('role').textContent = 'Role: ' + currentRole;
+      for (const card of cards.values()) updateButtons(card);
+    }
+
+    function updateButtons(card) {
+      card.controls.querySelectorAll('button').forEach(button => {
+        button.disabled = currentRole !== 'operator' || card.online === false;
+        button.title = currentRole === 'viewer' ? 'Viewer is read-only' : '';
+      });
+    }
+
+    async function api(path, method = 'GET', value) {
+      const options = { method, headers: { Authorization: 'Bearer ' + token() } };
+      if (value !== undefined) {
+        options.headers['Content-Type'] = 'application/json';
+        options.body = JSON.stringify({ value });
+      }
+      const response = await fetch(path, options);
+      setAccessRole(response.headers.get('X-Access-Role'));
+      const text = await response.text();
+      const body = text ? JSON.parse(text) : null;
+      if (!response.ok) throw new Error(response.status + ': ' + (body?.error || response.statusText));
+      return body;
+    }
+
+    function append(parent, tag, text) {
+      const element = document.createElement(tag);
+      if (text !== undefined) element.textContent = text;
+      parent.appendChild(element);
+      return element;
+    }
+
+    function createCard(thing) {
+      const element = append(document.getElementById('cards'), 'section');
+      element.className = 'card';
+      append(element, 'h3', thing.name || thing.id);
+      const card = { element, state: {}, initialized: false, revision: 0, online: true };
+      card.status = append(element, 'p', 'Status: checking...');
+      card.status.className = 'device-status';
+      card.properties = append(element, 'pre', 'Loading properties...');
+      card.controls = append(element, 'div');
+      card.message = append(element, 'p');
+      card.message.className = 'message';
+      const details = append(element, 'details');
+      append(details, 'summary', 'Thing description');
+      card.model = append(details, 'pre', 'Loading description...');
+      cards.set(thing.id, card);
+      api('/things/' + encodeURIComponent(thing.id))
+        .then(description => card.model.textContent = JSON.stringify(description.model, null, 2))
+        .catch(error => showMessage(card, error.message, true));
+    }
+
+    async function refreshThing(id) {
+      const card = cards.get(id);
+      if (!card) return;
+      const revision = ++card.revision;
+      try {
+        const state = await api('/things/' + encodeURIComponent(id) + '/properties');
+        if (cards.get(id) !== card || revision !== card.revision) return;
+        card.state = state;
+        renderProperties(card);
+        if (!card.initialized) { addControls(id, card); card.initialized = true; }
+        updateButtons(card);
+      } catch (error) {
+        if (cards.get(id) === card) showMessage(card, error.message, true);
+      }
+    }
+
+    function renderProperties(card) {
+      card.properties.textContent = JSON.stringify(card.state, null, 2);
+    }
+
+    function showMessage(card, message, error = false) {
+      card.message.textContent = message;
+      card.message.className = error ? 'message error' : 'message';
+    }
+
+    function controlRow(card) {
+      const row = append(card.controls, 'div');
+      row.className = 'controls';
+      return row;
+    }
+
+    function numericInput(row, label, initial, min, max, step) {
+      const wrapper = append(row, 'label', label + ' ');
+      const input = append(wrapper, 'input');
+      input.type = 'number'; input.required = true; input.value = initial; input.step = step;
+      if (min !== undefined) input.min = min;
+      if (max !== undefined) input.max = max;
+      return input;
+    }
+
+    function numberValue(input) {
+      if (!input.value || !input.checkValidity()) throw new Error('Enter a valid number in the allowed range.');
+      return Number(input.value);
+    }
+
+    function button(row, label, id, card, method, path, readValue) {
+      const element = append(row, 'button', label);
+      element.disabled = currentRole !== 'operator' || card.online === false;
+      element.addEventListener('click', async () => {
+        element.disabled = true;
+        try {
+          const value = readValue ? readValue() : undefined;
+          await api('/things/' + encodeURIComponent(id) + '/' + path, method, value);
+          await refreshThing(id);
+          showMessage(card, '200: ' + path + ' completed');
+        } catch (error) {
+          showMessage(card, error.message, true);
+        } finally {
+          updateButtons(card);
+        }
+      });
+    }
+
+    function addControls(id, card) {
+      if (id === 'lamp') {
+        const power = controlRow(card);
+        button(power, 'On', id, card, 'PUT', 'properties/on', () => true);
+        button(power, 'Off', id, card, 'PUT', 'properties/on', () => false);
+        button(power, 'Toggle', id, card, 'POST', 'actions/toggle');
+        const row = controlRow(card);
+        const input = numericInput(row, 'Brightness', card.state.brightness, 0, 100, 1);
+        button(row, 'Set brightness', id, card, 'POST', 'actions/setBrightness', () => numberValue(input));
+      } else if (id === 'thermostat') {
+        const targetRow = controlRow(card);
+        const input = numericInput(targetRow, 'Target (°C)', card.state.target, undefined, undefined, 'any');
+        button(targetRow, 'Set target', id, card, 'POST', 'actions/setTarget', () => numberValue(input));
+        const modeRow = controlRow(card);
+        const label = append(modeRow, 'label', 'Mode ');
+        const select = append(label, 'select');
+        for (const mode of ['off', 'heat', 'eco']) { const option = append(select, 'option', mode); option.value = mode; }
+        select.value = card.state.mode;
+        button(modeRow, 'Apply mode', id, card, 'PUT', 'properties/mode', () => select.value);
+      } else if (id === 'motion') {
+        button(controlRow(card), 'Simulate motion', id, card, 'POST', 'actions/simulateMotion');
+      }
+    }
+
+    function updateFromEvent(event) {
+      const card = cards.get(event.thingId);
+      if (!card) return;
+      if (!card.initialized) { refreshThing(event.thingId); return; }
+      const data = event.data || {};
+      // Invalidate an older pending read before applying the newest event.
+      card.revision++;
+      if (event.type === 'propertyChanged') card.state[data.property] = data.value;
+      else if (event.type === 'motion') card.state.lastMotion = data.lastMotion;
+      else if (event.type === 'targetReached') card.state.temperature = data.temperature;
+      else { refreshThing(event.thingId); return; }
+      renderProperties(card);
+    }
+  </script>
+</body>
+</html>

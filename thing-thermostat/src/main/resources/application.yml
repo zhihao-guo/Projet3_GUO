@@ -1,0 +1,19 @@
+server:
+  port: 8081
+spring:
+  task:
+    scheduling:
+      pool:
+        size: 2
+thing:
+  base-url: http://localhost:${server.port}
+gateway:
+  url: http://localhost:8080
+  token: operator-secret
+simulation:
+  initial-temperature: 17.5
+  outside-temperature: 15.0
+  heat-step: 0.2
+  eco-step: 0.1
+  cooling-step: 0.05
+  tick-ms: 1000

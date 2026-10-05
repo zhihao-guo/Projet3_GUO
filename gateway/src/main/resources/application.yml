@@ -1,0 +1,20 @@
+server:
+  port: 8080
+
+spring:
+  task:
+    scheduling:
+      pool:
+        size: 4
+
+gateway:
+  # Authorization: Bearer <token> on /things/** and /events/**
+  token: operator-secret
+  viewer-token: viewer-secret
+  liveness:
+    interval-ms: 10000
+    timeout-ms: 1000
+
+rules:
+  # Demo value; use 60 for the reference delay.
+  lamp-off-seconds: 10
